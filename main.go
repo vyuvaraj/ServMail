@@ -79,6 +79,7 @@ func main() {
 	mux.HandleFunc("/api/mail/tracking/", handleGetTracking)
 	mux.HandleFunc("/api/mail/tracking/event", handlePostTrackingEvent)
 	mux.HandleFunc("/api/mail/preferences", handlePreferences)
+	mux.HandleFunc("/api/mail/dashboard", handleMailDashboard)
 
 	serverHandler := ServShared.AuthMiddleware(mux)
 
@@ -393,4 +394,36 @@ func handlePreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+}
+
+func handleMailDashboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	trackingMu.RLock()
+	totalSent := 0
+	totalBounced := 0
+	totalOpened := 0
+	for _, info := range trackingRepo {
+		switch info.Status {
+		case "sent":
+			totalSent++
+		case "bounced":
+			totalBounced++
+		case "opened":
+			totalOpened++
+		}
+	}
+	trackingMu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"total_messages": len(trackingRepo),
+		"sent":           totalSent,
+		"bounced":        totalBounced,
+		"opened":         totalOpened,
+	})
 }

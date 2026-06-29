@@ -285,3 +285,43 @@ func TestServMailTrackingAndPreferences(t *testing.T) {
 		t.Errorf("expected StatusForbidden (403) for opted out category, got %d", resp2.StatusCode)
 	}
 }
+
+func TestServMailDashboard(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/mail/send", handleSend)
+	mux.HandleFunc("/api/mail/dashboard", handleMailDashboard)
+
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	// Reset trackingRepo for isolated test assertion
+	trackingMu.Lock()
+	trackingRepo = make(map[string]*TrackingInfo)
+	trackingMu.Unlock()
+
+	// 1. Send first mail -> status "sent"
+	sendPayload1 := SendRequest{
+		Channel:  "email",
+		Target:   "dash-user@example.com",
+		Template: "Welcome to dashboard tracking!",
+	}
+	body1, _ := json.Marshal(sendPayload1)
+	resp1, err := http.Post(testServer.URL+"/api/mail/send", "application/json", bytes.NewReader(body1))
+	if err != nil || resp1.StatusCode != http.StatusOK {
+		t.Fatalf("first send failed: %v", err)
+	}
+	resp1.Body.Close()
+
+	// 2. Query Dashboard -> metrics should align
+	dashResp, err := http.Get(testServer.URL + "/api/mail/dashboard")
+	if err != nil || dashResp.StatusCode != http.StatusOK {
+		t.Fatalf("dashboard request failed: %v", err)
+	}
+	var metrics map[string]interface{}
+	json.NewDecoder(dashResp.Body).Decode(&metrics)
+	dashResp.Body.Close()
+
+	if metrics["total_messages"].(float64) != 1 || metrics["sent"].(float64) != 1 {
+		t.Errorf("unexpected dashboard stats: %+v", metrics)
+	}
+}

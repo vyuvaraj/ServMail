@@ -16,3 +16,4 @@ This roadmap outlines the planned development phases for the ServMail notificati
 - [ ] **Attachments cold tier** — Eviction of large attachment payloads.
 - [x] **Rate limiting** — Per-recipient throttling to prevent spam. [June 29, 2026]
 - [x] **Template versioning** — Versioned template support. [June 29, 2026]
+- [x] **Delivery dashboard** — Integrated telemetry metrics logs. [June 29, 2026]
