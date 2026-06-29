@@ -362,7 +362,15 @@ func handlePreferences(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		recipient := r.URL.Query().Get("recipient")
 		if recipient == "" {
-			http.Error(w, "Recipient parameter required", http.StatusBadRequest)
+			preferencesMu.RLock()
+			var list []*Preferences
+			for _, p := range preferences {
+				list = append(list, p)
+			}
+			preferencesMu.RUnlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(list)
 			return
 		}
 
@@ -441,6 +449,19 @@ func handleMailDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		attachmentsMu.RLock()
+		var list []*Attachment
+		for _, a := range attachmentsRepo {
+			list = append(list, a)
+		}
+		attachmentsMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(list)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
