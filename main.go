@@ -19,13 +19,16 @@ import (
 type SendRequest struct {
 	Channel  string                 `json:"channel"`  // email, slack, sms
 	Target   string                 `json:"target"`   // email address, webhook URL, or phone number
-	Template string                 `json:"template"` // Go template text
+	Template string                 `json:"template"` // Go template text or registered name
+	Version  string                 `json:"version"`  // Optional template version
 	Context  map[string]interface{} `json:"context"`  // template variables
 }
 
 var (
-	rateLimits   = make(map[string][]time.Time)
-	rateLimitsMu sync.Mutex
+	rateLimits     = make(map[string][]time.Time)
+	rateLimitsMu   sync.Mutex
+	templateRepo   = make(map[string]map[string]string) // name -> version -> content
+	templateRepoMu sync.RWMutex
 )
 
 type SendResponse struct {
@@ -54,6 +57,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/api/mail/send", handleSend)
+	mux.HandleFunc("/api/mail/templates", handleRegisterTemplate)
 
 	serverHandler := ServShared.AuthMiddleware(mux)
 
@@ -103,8 +107,21 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	rateLimits[req.Target] = active
 	rateLimitsMu.Unlock()
 
-	// 1. Render template
-	tmpl, err := template.New("notification").Parse(req.Template)
+	// 1. Resolve template content
+	templateText := req.Template
+	if req.Version != "" {
+		templateRepoMu.RLock()
+		versions, exists := templateRepo[req.Template]
+		if exists {
+			content, vExists := versions[req.Version]
+			if vExists {
+				templateText = content
+			}
+		}
+		templateRepoMu.RUnlock()
+	}
+
+	tmpl, err := template.New("notification").Parse(templateText)
 	if err != nil {
 		http.Error(w, "Template compile error: "+err.Error(), http.StatusBadRequest)
 		return
@@ -171,4 +188,39 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		DeliveredTo: req.Target,
 		Body:        bodyStr,
 	})
+}
+
+func handleRegisterTemplate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	if req.Name == "" || req.Version == "" || req.Content == "" {
+		http.Error(w, "Name, version, and content are required", http.StatusBadRequest)
+		return
+	}
+
+	templateRepoMu.Lock()
+	versions, exists := templateRepo[req.Name]
+	if !exists {
+		versions = make(map[string]string)
+		templateRepo[req.Name] = versions
+	}
+	versions[req.Version] = req.Content
+	templateRepoMu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"status":"success","message":"Template version registered successfully"}`))
 }
