@@ -2,14 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -71,11 +74,11 @@ func loadTemplatesFromStore() {
 		var loadedTemplates map[string]map[string]string
 		if json.Unmarshal(data, &loadedTemplates) == nil {
 			templateRepo = loadedTemplates
-			log.Printf("[PERSISTENCE] Loaded %d templates from ServStore", len(templateRepo))
+			ServShared.LogJSON(nil, "info", fmt.Sprintf("Loaded %d templates from ServStore", len(templateRepo)))
 		}
 		templateRepoMu.Unlock()
 	} else {
-		log.Printf("[PERSISTENCE] Failed to load templates (will use default/empty): %v", err)
+		ServShared.LogJSON(nil, "warn", fmt.Sprintf("Failed to load templates (will use default/empty): %v", err))
 	}
 }
 
@@ -130,12 +133,35 @@ func main() {
 	mux.HandleFunc("/api/mail/attachments", handleUploadAttachment)
 	mux.HandleFunc("/api/mail/attachments/", handleGetAttachment)
 
-	serverHandler := ServShared.AuthMiddleware(mux)
+	serverHandler := ServShared.TraceMiddleware("servmail", ServShared.AuthMiddleware(mux))
 
-	log.Printf("ServMail server starting on port %s", port)
-	if err := http.ListenAndServe(":"+port, serverHandler); err != nil {
-		log.Fatalf("failed to start ServMail: %v", err)
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: serverHandler,
 	}
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("[INFO] ServMail server starting on port %s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("failed to start ServMail: %v", err)
+		}
+	}()
+
+	<-stop
+
+	log.Println("[INFO] Shutting down ServMail server...")
+	ServShared.Shutdown()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server shutdown failed: %v", err)
+	}
+	log.Println("[INFO] ServMail server exited cleanly")
 }
 
 func handleSend(w http.ResponseWriter, r *http.Request) {

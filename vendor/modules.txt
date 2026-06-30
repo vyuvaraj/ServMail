@@ -1,0 +1,6 @@
+# github.com/golang-jwt/jwt/v5 v5.3.1
+## explicit; go 1.21
+github.com/golang-jwt/jwt/v5
+# github.com/vyuvaraj/ServShared v0.0.0-20260629075201-a9693fb48c7d
+## explicit; go 1.26.4
+github.com/vyuvaraj/ServShared
