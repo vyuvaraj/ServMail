@@ -2,3 +2,5 @@ github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63Y
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
 github.com/vyuvaraj/ServShared v0.0.0-20260629075201-a9693fb48c7d h1:roruXlhJqZkjyrZ0CENKRS2dms877n0fW0w7t/u2lmY=
 github.com/vyuvaraj/ServShared v0.0.0-20260629075201-a9693fb48c7d/go.mod h1:quYZYsX/CJFhifDhhhpf3H32EZAov8SX+5eGC8wb5dI=
+github.com/vyuvaraj/ServShared v0.0.0-20260630050340-6ad53db7fc0a h1:45aLfBTvl9il1p0E+q1V50/NAv3/4PpcCs4GWezXL0w=
+github.com/vyuvaraj/ServShared v0.0.0-20260630050340-6ad53db7fc0a/go.mod h1:quYZYsX/CJFhifDhhhpf3H32EZAov8SX+5eGC8wb5dI=
