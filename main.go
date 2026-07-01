@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -48,6 +50,14 @@ type Attachment struct {
 	Payload   string `json:"payload,omitempty"`
 }
 
+type MockEmail struct {
+	To      string    `json:"to"`
+	From    string    `json:"from"`
+	Subject string    `json:"subject"`
+	Body    string    `json:"body"`
+	Time    time.Time `json:"time"`
+}
+
 var (
 	rateLimits      = make(map[string][]time.Time)
 	rateLimitsMu    sync.Mutex
@@ -59,9 +69,57 @@ var (
 	preferencesMu   sync.RWMutex
 	attachmentsRepo = make(map[string]*Attachment)
 	attachmentsMu   sync.RWMutex
+
+	mockedEmails   = []MockEmail{}
+	mockedEmailsMu sync.RWMutex
+
+	templateStore TemplateStore
+	defaultServer *MailServer
 )
 
-var templateStore TemplateStore
+type MailServer struct {
+	port            string
+	templateStore   TemplateStore
+	rateLimits      *map[string][]time.Time
+	rateLimitsMu    *sync.Mutex
+	templateRepo    *map[string]map[string]string
+	templateRepoMu  *sync.RWMutex
+	trackingRepo    *map[string]*TrackingInfo
+	trackingMu      *sync.RWMutex
+	preferences     *map[string]*Preferences
+	preferencesMu   *sync.RWMutex
+	attachmentsRepo *map[string]*Attachment
+	attachmentsMu   *sync.RWMutex
+	mockSMTPPort    string
+	mockedEmails    *[]MockEmail
+	mockedEmailsMu  *sync.RWMutex
+}
+
+func NewMailServer(port string, store TemplateStore,
+	rateLimits *map[string][]time.Time, rateLimitsMu *sync.Mutex,
+	templateRepo *map[string]map[string]string, templateRepoMu *sync.RWMutex,
+	trackingRepo *map[string]*TrackingInfo, trackingMu *sync.RWMutex,
+	preferences *map[string]*Preferences, preferencesMu *sync.RWMutex,
+	attachmentsRepo *map[string]*Attachment, attachmentsMu *sync.RWMutex,
+	mockSMTPPort string, mockedEmails *[]MockEmail, mockedEmailsMu *sync.RWMutex) *MailServer {
+	return &MailServer{
+		port:            port,
+		templateStore:   store,
+		rateLimits:      rateLimits,
+		rateLimitsMu:    rateLimitsMu,
+		templateRepo:    templateRepo,
+		templateRepoMu:  templateRepoMu,
+		trackingRepo:    trackingRepo,
+		trackingMu:      trackingMu,
+		preferences:     preferences,
+		preferencesMu:   preferencesMu,
+		attachmentsRepo: attachmentsRepo,
+		attachmentsMu:   attachmentsMu,
+		mockSMTPPort:    mockSMTPPort,
+		mockedEmails:    mockedEmails,
+		mockedEmailsMu:  mockedEmailsMu,
+	}
+}
 
 func initStore() {
 	client := ServShared.NewStoreClient()
@@ -103,6 +161,7 @@ type SendResponse struct {
 
 func main() {
 	portStr := flag.String("port", "8094", "ServMail server port")
+	mockSMTPPortStr := flag.String("mock-smtp-port", "1025", "Port to start the offline mock SMTP server")
 	flag.Parse()
 
 	port := os.Getenv("PORT")
@@ -110,9 +169,24 @@ func main() {
 		port = *portStr
 	}
 
-	primaryPool := &http.Server{} // just a placeholder to keep target content alignment if needed
-	_ = primaryPool
+	mockSMTPPort := os.Getenv("MOCK_SMTP_PORT")
+	if mockSMTPPort == "" {
+		mockSMTPPort = *mockSMTPPortStr
+	}
+
 	initStore()
+
+	// Initialize the dependency-injected server
+	defaultServer = NewMailServer(port, templateStore,
+		&rateLimits, &rateLimitsMu,
+		&templateRepo, &templateRepoMu,
+		&trackingRepo, &trackingMu,
+		&preferences, &preferencesMu,
+		&attachmentsRepo, &attachmentsMu,
+		mockSMTPPort, &mockedEmails, &mockedEmailsMu)
+
+	// Start the offline mock SMTP server in a background thread
+	go defaultServer.startMockSMTPServer()
 
 	mux := http.NewServeMux()
 
@@ -133,6 +207,9 @@ func main() {
 	mux.HandleFunc("/api/mail/dashboard", handleMailDashboard)
 	mux.HandleFunc("/api/mail/attachments", handleUploadAttachment)
 	mux.HandleFunc("/api/mail/attachments/", handleGetAttachment)
+	
+	// Add endpoint to access/clear mocked emails
+	mux.HandleFunc("/api/mail/mock-smtp", handleGetMockEmails)
 
 	serverHandler := ServShared.TraceMiddleware("servmail", ServShared.AuthMiddleware(mux))
 
@@ -163,6 +240,113 @@ func main() {
 		log.Fatalf("Server shutdown failed: %v", err)
 	}
 	log.Println("[INFO] ServMail server exited cleanly")
+}
+
+func (s *MailServer) startMockSMTPServer() {
+	addr := ":" + s.mockSMTPPort
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("[SMTP MOCK] Failed to start SMTP mock server on port %s: %v", s.mockSMTPPort, err)
+		return
+	}
+	defer listener.Close()
+	log.Printf("[SMTP MOCK] SMTP mock server listening on port %s", s.mockSMTPPort)
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("[SMTP MOCK] Accept error: %v", err)
+			continue
+		}
+		go s.handleSMTPConnection(conn)
+	}
+}
+
+func (s *MailServer) handleSMTPConnection(conn net.Conn) {
+	defer conn.Close()
+	conn.Write([]byte("220 ServMail Mock SMTP Server Ready\r\n"))
+
+	var email MockEmail
+	email.Time = time.Now()
+
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		line = strings.TrimSpace(line)
+
+		if strings.HasPrefix(strings.ToUpper(line), "HELO") || strings.HasPrefix(strings.ToUpper(line), "EHLO") {
+			conn.Write([]byte("250 Hello\r\n"))
+		} else if strings.HasPrefix(strings.ToUpper(line), "MAIL FROM:") {
+			email.From = strings.TrimSpace(strings.TrimPrefix(line, "MAIL FROM:"))
+			conn.Write([]byte("250 2.1.0 OK\r\n"))
+		} else if strings.HasPrefix(strings.ToUpper(line), "RCPT TO:") {
+			email.To = strings.TrimSpace(strings.TrimPrefix(line, "RCPT TO:"))
+			conn.Write([]byte("250 2.1.5 OK\r\n"))
+		} else if strings.ToUpper(line) == "DATA" {
+			conn.Write([]byte("354 Start mail input; end with <CRLF>.<CRLF>\r\n"))
+
+			var bodyBuilder strings.Builder
+			for {
+				bodyLine, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				if bodyLine == ".\r\n" || bodyLine == ".\n" {
+					break
+				}
+				bodyBuilder.WriteString(bodyLine)
+			}
+
+			rawMessage := bodyBuilder.String()
+			email.Body = rawMessage
+
+			lines := strings.Split(rawMessage, "\n")
+			for _, l := range lines {
+				if strings.HasPrefix(strings.ToUpper(l), "SUBJECT:") {
+					email.Subject = strings.TrimSpace(strings.TrimPrefix(l, "SUBJECT:"))
+					break
+				}
+			}
+
+			s.mockedEmailsMu.Lock()
+			*s.mockedEmails = append(*s.mockedEmails, email)
+			s.mockedEmailsMu.Unlock()
+
+			log.Printf("[SMTP MOCK] Captured email to %s: %s", email.To, email.Subject)
+			conn.Write([]byte("250 2.0.0 OK: Message accepted for delivery\r\n"))
+		} else if strings.ToUpper(line) == "QUIT" {
+			conn.Write([]byte("221 2.0.0 Bye\r\n"))
+			return
+		} else {
+			conn.Write([]byte("250 OK\r\n"))
+		}
+	}
+}
+
+func handleGetMockEmails(w http.ResponseWriter, r *http.Request) {
+	defaultServer.handleGetMockEmails(w, r)
+}
+
+func (s *MailServer) handleGetMockEmails(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.mockedEmailsMu.RLock()
+		defer s.mockedEmailsMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(*s.mockedEmails)
+		return
+	}
+	if r.Method == http.MethodDelete {
+		s.mockedEmailsMu.Lock()
+		defer s.mockedEmailsMu.Unlock()
+		*s.mockedEmails = []MockEmail{}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"success","message":"Mock emails cleared"}`))
+		return
+	}
+	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 }
 
 func handleSend(w http.ResponseWriter, r *http.Request) {

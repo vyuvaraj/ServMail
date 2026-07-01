@@ -1,13 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vyuvaraj/ServShared"
 )
 
 func setupTest() {
@@ -484,4 +488,99 @@ func TestTableDrivenMailValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestServMailMockSMTPServer(t *testing.T) {
+	setupTest()
+	
+	storeClient := ServShared.NewStoreClient()
+	tmplStore := NewServStoreTemplateStore(storeClient)
+	mockServer := NewMailServer("8094", tmplStore,
+		&rateLimits, &rateLimitsMu,
+		&templateRepo, &templateRepoMu,
+		&trackingRepo, &trackingMu,
+		&preferences, &preferencesMu,
+		&attachmentsRepo, &attachmentsMu,
+		"1026",
+		&mockedEmails, &mockedEmailsMu)
+		
+	go mockServer.startMockSMTPServer()
+	
+	time.Sleep(50 * time.Millisecond)
+	
+	conn, err := net.Dial("tcp", "localhost:1026")
+	if err != nil {
+		t.Fatalf("failed to connect to mock SMTP: %v", err)
+	}
+	defer conn.Close()
+	
+	reader := bufio.NewReader(conn)
+	greeting, _ := reader.ReadString('\n')
+	if !strings.Contains(greeting, "220") {
+		t.Errorf("unexpected greeting: %s", greeting)
+	}
+	
+	conn.Write([]byte("HELO localhost\r\n"))
+	_, _ = reader.ReadString('\n')
+	
+	conn.Write([]byte("MAIL FROM: sender@example.com\r\n"))
+	_, _ = reader.ReadString('\n')
+	
+	conn.Write([]byte("RCPT TO: receiver@example.com\r\n"))
+	_, _ = reader.ReadString('\n')
+	
+	conn.Write([]byte("DATA\r\n"))
+	_, _ = reader.ReadString('\n')
+	
+	conn.Write([]byte("Subject: Test Subject\r\n\r\nTest Body content\r\n.\r\n"))
+	_, _ = reader.ReadString('\n')
+	
+	conn.Write([]byte("QUIT\r\n"))
+	
+	time.Sleep(50 * time.Millisecond)
+	
+	mockedEmailsMu.RLock()
+	length := len(mockedEmails)
+	if length == 0 {
+		t.Errorf("expected at least one captured email, got 0")
+	} else {
+		captured := mockedEmails[length-1]
+		if !strings.Contains(captured.To, "receiver@example.com") {
+			t.Errorf("expected to receiver@example.com, got %q", captured.To)
+		}
+		if !strings.Contains(captured.Subject, "Test Subject") {
+			t.Errorf("expected Subject 'Test Subject', got %q", captured.Subject)
+		}
+	}
+	mockedEmailsMu.RUnlock()
+	
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/mail/mock-smtp", mockServer.handleGetMockEmails)
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+	
+	respGet, err := http.Get(testServer.URL + "/api/mail/mock-smtp")
+	if err != nil || respGet.StatusCode != http.StatusOK {
+		t.Fatalf("failed GET request: %v", err)
+	}
+	var retrieved []MockEmail
+	json.NewDecoder(respGet.Body).Decode(&retrieved)
+	respGet.Body.Close()
+	
+	if len(retrieved) == 0 {
+		t.Errorf("expected retrieved mock emails to not be empty")
+	}
+	
+	reqClear, _ := http.NewRequest(http.MethodDelete, testServer.URL+"/api/mail/mock-smtp", nil)
+	respClear, err := http.DefaultClient.Do(reqClear)
+	if err != nil || respClear.StatusCode != http.StatusOK {
+		t.Fatalf("failed DELETE request: %v", err)
+	}
+	respClear.Body.Close()
+	
+	mockedEmailsMu.RLock()
+	if len(mockedEmails) != 0 {
+		t.Errorf("expected mocked emails to be cleared, got %d", len(mockedEmails))
+	}
+	mockedEmailsMu.RUnlock()
 }
