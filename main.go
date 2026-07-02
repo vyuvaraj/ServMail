@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -15,93 +13,58 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"text/template"
 	"time"
 
 	"github.com/vyuvaraj/ServShared"
+	"servmail/pkg/delivery"
+	"servmail/pkg/storage"
+	mailtemplate "servmail/pkg/template"
 )
-
-type SendRequest struct {
-	Channel  string                 `json:"channel"`  // email, slack, sms
-	Target   string                 `json:"target"`   // email address, webhook URL, or phone number
-	Template string                 `json:"template"` // Go template text or registered name
-	Version  string                 `json:"version"`  // Optional template version
-	Category string                 `json:"category"`  // e.g. "marketing", "transactional", "alerts"
-	Context  map[string]interface{} `json:"context"`  // template variables
-}
-
-type TrackingInfo struct {
-	MessageID   string    `json:"message_id"`
-	Status      string    `json:"status"` // sent, opened, clicked, bounced
-	DeliveredTo string    `json:"delivered_to"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type Preferences struct {
-	Recipient string          `json:"recipient"`
-	OptedOut  map[string]bool `json:"opted_out"` // category -> is_opted_out
-}
-
-type Attachment struct {
-	ID        string `json:"id"`
-	Filename  string `json:"filename"`
-	SizeBytes int64  `json:"size_bytes"`
-	Storage   string `json:"storage"` // local, cold
-	Payload   string `json:"payload,omitempty"`
-}
-
-type MockEmail struct {
-	To      string    `json:"to"`
-	From    string    `json:"from"`
-	Subject string    `json:"subject"`
-	Body    string    `json:"body"`
-	Time    time.Time `json:"time"`
-}
 
 var (
 	rateLimits      = make(map[string][]time.Time)
 	rateLimitsMu    sync.Mutex
 	templateRepo    = make(map[string]map[string]string) // name -> version -> content
 	templateRepoMu  sync.RWMutex
-	trackingRepo    = make(map[string]*TrackingInfo)
+	trackingRepo    = make(map[string]*storage.TrackingInfo)
 	trackingMu      sync.RWMutex
-	preferences     = make(map[string]*Preferences)
+	preferences     = make(map[string]*storage.Preferences)
 	preferencesMu   sync.RWMutex
-	attachmentsRepo = make(map[string]*Attachment)
+	attachmentsRepo = make(map[string]*storage.Attachment)
 	attachmentsMu   sync.RWMutex
 
-	mockedEmails   = []MockEmail{}
+	mockedEmails   = []storage.MockEmail{}
 	mockedEmailsMu sync.RWMutex
 
-	templateStore TemplateStore
+	templateStore storage.TemplateStore
 	defaultServer *MailServer
 )
 
 type MailServer struct {
 	port            string
-	templateStore   TemplateStore
+	templateStore   storage.TemplateStore
 	rateLimits      *map[string][]time.Time
 	rateLimitsMu    *sync.Mutex
 	templateRepo    *map[string]map[string]string
 	templateRepoMu  *sync.RWMutex
-	trackingRepo    *map[string]*TrackingInfo
+	trackingRepo    *map[string]*storage.TrackingInfo
 	trackingMu      *sync.RWMutex
-	preferences     *map[string]*Preferences
+	preferences     *map[string]*storage.Preferences
 	preferencesMu   *sync.RWMutex
-	attachmentsRepo *map[string]*Attachment
+	attachmentsRepo *map[string]*storage.Attachment
 	attachmentsMu   *sync.RWMutex
 	mockSMTPPort    string
-	mockedEmails    *[]MockEmail
+	mockedEmails    *[]storage.MockEmail
 	mockedEmailsMu  *sync.RWMutex
 }
 
-func NewMailServer(port string, store TemplateStore,
+func NewMailServer(port string, store storage.TemplateStore,
 	rateLimits *map[string][]time.Time, rateLimitsMu *sync.Mutex,
 	templateRepo *map[string]map[string]string, templateRepoMu *sync.RWMutex,
-	trackingRepo *map[string]*TrackingInfo, trackingMu *sync.RWMutex,
-	preferences *map[string]*Preferences, preferencesMu *sync.RWMutex,
-	attachmentsRepo *map[string]*Attachment, attachmentsMu *sync.RWMutex,
-	mockSMTPPort string, mockedEmails *[]MockEmail, mockedEmailsMu *sync.RWMutex) *MailServer {
+	trackingRepo *map[string]*storage.TrackingInfo, trackingMu *sync.RWMutex,
+	preferences *map[string]*storage.Preferences, preferencesMu *sync.RWMutex,
+	attachmentsRepo *map[string]*storage.Attachment, attachmentsMu *sync.RWMutex,
+	mockSMTPPort string, mockedEmails *[]storage.MockEmail, mockedEmailsMu *sync.RWMutex) *MailServer {
 	return &MailServer{
 		port:            port,
 		templateStore:   store,
@@ -123,7 +86,7 @@ func NewMailServer(port string, store TemplateStore,
 
 func initStore() {
 	client := ServShared.NewStoreClient()
-	templateStore = NewServStoreTemplateStore(client)
+	templateStore = storage.NewServStoreTemplateStore(client)
 	loadTemplatesFromStore()
 }
 
@@ -258,71 +221,7 @@ func (s *MailServer) startMockSMTPServer() {
 			log.Printf("[SMTP MOCK] Accept error: %v", err)
 			continue
 		}
-		go s.handleSMTPConnection(conn)
-	}
-}
-
-func (s *MailServer) handleSMTPConnection(conn net.Conn) {
-	defer conn.Close()
-	conn.Write([]byte("220 ServMail Mock SMTP Server Ready\r\n"))
-
-	var email MockEmail
-	email.Time = time.Now()
-
-	reader := bufio.NewReader(conn)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			return
-		}
-		line = strings.TrimSpace(line)
-
-		if strings.HasPrefix(strings.ToUpper(line), "HELO") || strings.HasPrefix(strings.ToUpper(line), "EHLO") {
-			conn.Write([]byte("250 Hello\r\n"))
-		} else if strings.HasPrefix(strings.ToUpper(line), "MAIL FROM:") {
-			email.From = strings.TrimSpace(strings.TrimPrefix(line, "MAIL FROM:"))
-			conn.Write([]byte("250 2.1.0 OK\r\n"))
-		} else if strings.HasPrefix(strings.ToUpper(line), "RCPT TO:") {
-			email.To = strings.TrimSpace(strings.TrimPrefix(line, "RCPT TO:"))
-			conn.Write([]byte("250 2.1.5 OK\r\n"))
-		} else if strings.ToUpper(line) == "DATA" {
-			conn.Write([]byte("354 Start mail input; end with <CRLF>.<CRLF>\r\n"))
-
-			var bodyBuilder strings.Builder
-			for {
-				bodyLine, err := reader.ReadString('\n')
-				if err != nil {
-					return
-				}
-				if bodyLine == ".\r\n" || bodyLine == ".\n" {
-					break
-				}
-				bodyBuilder.WriteString(bodyLine)
-			}
-
-			rawMessage := bodyBuilder.String()
-			email.Body = rawMessage
-
-			lines := strings.Split(rawMessage, "\n")
-			for _, l := range lines {
-				if strings.HasPrefix(strings.ToUpper(l), "SUBJECT:") {
-					email.Subject = strings.TrimSpace(strings.TrimPrefix(l, "SUBJECT:"))
-					break
-				}
-			}
-
-			s.mockedEmailsMu.Lock()
-			*s.mockedEmails = append(*s.mockedEmails, email)
-			s.mockedEmailsMu.Unlock()
-
-			log.Printf("[SMTP MOCK] Captured email to %s: %s", email.To, email.Subject)
-			conn.Write([]byte("250 2.0.0 OK: Message accepted for delivery\r\n"))
-		} else if strings.ToUpper(line) == "QUIT" {
-			conn.Write([]byte("221 2.0.0 Bye\r\n"))
-			return
-		} else {
-			conn.Write([]byte("250 OK\r\n"))
-		}
+		go delivery.HandleSMTPConnection(conn, s.mockedEmails, s.mockedEmailsMu)
 	}
 }
 
@@ -341,7 +240,7 @@ func (s *MailServer) handleGetMockEmails(w http.ResponseWriter, r *http.Request)
 	if r.Method == http.MethodDelete {
 		s.mockedEmailsMu.Lock()
 		defer s.mockedEmailsMu.Unlock()
-		*s.mockedEmails = []MockEmail{}
+		*s.mockedEmails = []storage.MockEmail{}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"success","message":"Mock emails cleared"}`))
 		return
@@ -355,7 +254,7 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req SendRequest
+	var req storage.SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid payload: "+err.Error(), http.StatusBadRequest)
 		return
@@ -419,19 +318,11 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		templateRepoMu.RUnlock()
 	}
 
-	tmpl, err := template.New("notification").Parse(templateText)
+	bodyStr, err := mailtemplate.RenderTemplate(templateText, req.Context)
 	if err != nil {
-		http.Error(w, "Template compile error: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "Template execution/compile error: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	var renderedBody bytes.Buffer
-	if err := tmpl.Execute(&renderedBody, req.Context); err != nil {
-		http.Error(w, "Template execution error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	bodyStr := renderedBody.String()
 
 	// 2. Deliver via channel with retries (simulate temporary failures if target contains "fail")
 	channelLower := strings.ToLower(req.Channel)
@@ -472,7 +363,7 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[DLQ] Published message to dead letter queue: %s (reason: %v)", dlqMsgID, deliveryErr)
 		
 		trackingMu.Lock()
-		trackingRepo[msgID] = &TrackingInfo{
+		trackingRepo[msgID] = &storage.TrackingInfo{
 			MessageID:   msgID,
 			Status:      "bounced",
 			DeliveredTo: req.Target,
@@ -492,7 +383,7 @@ func handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	trackingMu.Lock()
-	trackingRepo[msgID] = &TrackingInfo{
+	trackingRepo[msgID] = &storage.TrackingInfo{
 		MessageID:   msgID,
 		Status:      "sent",
 		DeliveredTo: req.Target,
@@ -540,6 +431,7 @@ func handleRegisterTemplate(w http.ResponseWriter, r *http.Request) {
 	versions[req.Version] = req.Content
 	templateRepoMu.Unlock()
 	saveTemplatesToStore()
+	_ = ServShared.EmitAuditEvent("ServMail", "TEMPLATE_REGISTER", "system", map[string]interface{}{"name": req.Name, "version": req.Version})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -612,7 +504,7 @@ func handlePreferences(w http.ResponseWriter, r *http.Request) {
 		recipient := r.URL.Query().Get("recipient")
 		if recipient == "" {
 			preferencesMu.RLock()
-			var list []*Preferences
+			var list []*storage.Preferences
 			for _, p := range preferences {
 				list = append(list, p)
 			}
@@ -628,7 +520,7 @@ func handlePreferences(w http.ResponseWriter, r *http.Request) {
 		preferencesMu.RUnlock()
 
 		if !exists {
-			pref = &Preferences{
+			pref = &storage.Preferences{
 				Recipient: recipient,
 				OptedOut:  make(map[string]bool),
 			}
@@ -641,7 +533,7 @@ func handlePreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
-		var req Preferences
+		var req storage.Preferences
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "Invalid payload", http.StatusBadRequest)
 			return
@@ -700,7 +592,7 @@ func handleMailDashboard(w http.ResponseWriter, r *http.Request) {
 func handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		attachmentsMu.RLock()
-		var list []*Attachment
+		var list []*storage.Attachment
 		for _, a := range attachmentsRepo {
 			list = append(list, a)
 		}
@@ -726,22 +618,22 @@ func handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	size := int64(len(req.Payload))
-	storage := "local"
+	storageType := "local"
 	payload := req.Payload
 
 	if size > 10000 {
-		storage = "cold"
+		storageType = "cold"
 		payload = ""
 	}
 
 	id := fmt.Sprintf("att-%d", time.Now().UnixNano())
 
 	attachmentsMu.Lock()
-	attachmentsRepo[id] = &Attachment{
+	attachmentsRepo[id] = &storage.Attachment{
 		ID:        id,
 		Filename:  req.Filename,
 		SizeBytes: size,
-		Storage:   storage,
+		Storage:   storageType,
 		Payload:   payload,
 	}
 	attachmentsMu.Unlock()
@@ -750,7 +642,7 @@ func handleUploadAttachment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{
 		"id":      id,
-		"storage": storage,
+		"storage": storageType,
 		"status":  "success",
 	})
 }

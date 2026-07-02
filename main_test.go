@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vyuvaraj/ServShared"
+	"servmail/pkg/storage"
 )
 
 func setupTest() {
@@ -24,15 +25,15 @@ func setupTest() {
 	templateRepoMu.Unlock()
 
 	trackingMu.Lock()
-	trackingRepo = make(map[string]*TrackingInfo)
+	trackingRepo = make(map[string]*storage.TrackingInfo)
 	trackingMu.Unlock()
 
 	preferencesMu.Lock()
-	preferences = make(map[string]*Preferences)
+	preferences = make(map[string]*storage.Preferences)
 	preferencesMu.Unlock()
 
 	attachmentsMu.Lock()
-	attachmentsRepo = make(map[string]*Attachment)
+	attachmentsRepo = make(map[string]*storage.Attachment)
 	attachmentsMu.Unlock()
 }
 
@@ -45,7 +46,7 @@ func TestServMailTemplateAndChannels(t *testing.T) {
 	defer testServer.Close()
 
 	// 1. Test Email Channel Template Rendering
-	payload := SendRequest{
+	payload := storage.SendRequest{
 		Channel:  "email",
 		Target:   "admin@example.com",
 		Template: "Hello {{.Name}}! Your code is {{.Code}}.",
@@ -102,7 +103,7 @@ func TestServMailRetriesAndDLQ(t *testing.T) {
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
 
-	payload := SendRequest{
+	payload := storage.SendRequest{
 		Channel:  "email",
 		Target:   "fail-mailbox@example.com", // will trigger failures
 		Template: "Hello",
@@ -135,7 +136,7 @@ func TestServMailRateLimiting(t *testing.T) {
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
 
-	payload := SendRequest{
+	payload := storage.SendRequest{
 		Channel:  "email",
 		Target:   "spammy-recipient@example.com",
 		Template: "Hello",
@@ -196,7 +197,7 @@ func TestServMailTemplateVersioning(t *testing.T) {
 	respT2.Body.Close()
 
 	// 3. Send mail using template name and version v1
-	sendPayload1 := SendRequest{
+	sendPayload1 := storage.SendRequest{
 		Channel:  "email",
 		Target:   "user@example.com",
 		Template: "welcome-email",
@@ -217,7 +218,7 @@ func TestServMailTemplateVersioning(t *testing.T) {
 	}
 
 	// 4. Send mail using template name and version v2
-	sendPayload2 := SendRequest{
+	sendPayload2 := storage.SendRequest{
 		Channel:  "email",
 		Target:   "user@example.com",
 		Template: "welcome-email",
@@ -247,7 +248,7 @@ func TestServMailTrackingAndPreferences(t *testing.T) {
 	defer testServer.Close()
 
 	// 1. Send mail and extract tracking ID
-	sendPayload := SendRequest{
+	sendPayload := storage.SendRequest{
 		Channel:  "email",
 		Target:   "track-user@example.com",
 		Template: "Hello Tracking!",
@@ -271,7 +272,7 @@ func TestServMailTrackingAndPreferences(t *testing.T) {
 	if err != nil || getResp.StatusCode != http.StatusOK {
 		t.Fatalf("failed to query tracking: %v", err)
 	}
-	var trackInfo TrackingInfo
+	var trackInfo storage.TrackingInfo
 	json.NewDecoder(getResp.Body).Decode(&trackInfo)
 	getResp.Body.Close()
 
@@ -293,7 +294,7 @@ func TestServMailTrackingAndPreferences(t *testing.T) {
 
 	// 4. Query tracking status again -> should be "opened"
 	getResp2, _ := http.Get(testServer.URL + "/api/mail/tracking/" + sendRes.MessageID)
-	var trackInfo2 TrackingInfo
+	var trackInfo2 storage.TrackingInfo
 	json.NewDecoder(getResp2.Body).Decode(&trackInfo2)
 	getResp2.Body.Close()
 
@@ -302,7 +303,7 @@ func TestServMailTrackingAndPreferences(t *testing.T) {
 	}
 
 	// 5. Update preferences to opt-out of "marketing"
-	prefPayload := Preferences{
+	prefPayload := storage.Preferences{
 		Recipient: "track-user@example.com",
 		OptedOut:  map[string]bool{"marketing": true},
 	}
@@ -336,11 +337,11 @@ func TestServMailDashboard(t *testing.T) {
 
 	// Reset trackingRepo for isolated test assertion
 	trackingMu.Lock()
-	trackingRepo = make(map[string]*TrackingInfo)
+	trackingRepo = make(map[string]*storage.TrackingInfo)
 	trackingMu.Unlock()
 
 	// 1. Send first mail -> status "sent"
-	sendPayload1 := SendRequest{
+	sendPayload1 := storage.SendRequest{
 		Channel:  "email",
 		Target:   "dash-user@example.com",
 		Template: "Welcome to dashboard tracking!",
@@ -398,7 +399,7 @@ func TestServMailAttachmentsColdTier(t *testing.T) {
 	if err != nil || getSmall.StatusCode != http.StatusOK {
 		t.Fatalf("fetch small failed: %v", err)
 	}
-	var attSmall Attachment
+	var attSmall storage.Attachment
 	json.NewDecoder(getSmall.Body).Decode(&attSmall)
 	getSmall.Body.Close()
 
@@ -429,7 +430,7 @@ func TestServMailAttachmentsColdTier(t *testing.T) {
 	if err != nil || getLarge.StatusCode != http.StatusOK {
 		t.Fatalf("fetch large failed: %v", err)
 	}
-	var attLarge Attachment
+	var attLarge storage.Attachment
 	json.NewDecoder(getLarge.Body).Decode(&attLarge)
 	getLarge.Body.Close()
 
@@ -471,7 +472,7 @@ func TestTableDrivenMailValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			payload := SendRequest{
+			payload := storage.SendRequest{
 				Channel:  tt.channel,
 				Target:   tt.target,
 				Template: tt.template,
@@ -494,7 +495,7 @@ func TestServMailMockSMTPServer(t *testing.T) {
 	setupTest()
 	
 	storeClient := ServShared.NewStoreClient()
-	tmplStore := NewServStoreTemplateStore(storeClient)
+	tmplStore := storage.NewServStoreTemplateStore(storeClient)
 	mockServer := NewMailServer("8094", tmplStore,
 		&rateLimits, &rateLimitsMu,
 		&templateRepo, &templateRepoMu,
@@ -563,7 +564,7 @@ func TestServMailMockSMTPServer(t *testing.T) {
 	if err != nil || respGet.StatusCode != http.StatusOK {
 		t.Fatalf("failed GET request: %v", err)
 	}
-	var retrieved []MockEmail
+	var retrieved []storage.MockEmail
 	json.NewDecoder(respGet.Body).Decode(&retrieved)
 	respGet.Body.Close()
 	
