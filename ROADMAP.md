@@ -26,3 +26,19 @@ This roadmap outlines the planned development phases for the ServMail notificati
 
 ## Phase 4: Developer Experience (Pending)
 - [ ] **Local Mock Dev Server** — Offline SMTP mock responses for local testing (DX.9)
+
+## Phase 5: Package Extraction & Advanced Delivery (Pending — July 2026)
+
+> **Issue:** `main.go` is 673 lines + 42-line store.go. No `pkg/` structure.
+
+| # | Item | Effort | Description | Status |
+|---|------|--------|-------------|--------|
+| 5.1 | **Extract `pkg/delivery/`** | Medium | Move channel-specific delivery logic (SMTP, Slack, Webhook, SMS) behind a `DeliveryChannel` interface | [ ] |
+| 5.2 | **Extract `pkg/templates/`** | Small | Move template rendering, versioning, and variable injection into dedicated package | [ ] |
+| 5.3 | **Extract `pkg/tracking/`** | Small | Move open/click/bounce tracking into dedicated package with proper analytics pipeline | [ ] |
+| 5.4 | **Delivery receipt webhooks** | Medium | POST delivery status (delivered/bounced/opened/clicked) to configurable callback URLs for external systems | [ ] |
+| 5.5 | **Template inheritance** | Small | Support base templates with blocks that child templates override (like Django template inheritance) | [ ] |
+| 5.6 | **Bulk send API** | Medium | Send to multiple recipients in one API call with per-recipient variable substitution. Queue internally via ServQueue | [ ] |
+| 5.7 | **Scheduled sends** | Small | Accept `send_at` parameter to delay delivery. Integrate with ServCron for precise timing | [ ] |
+
+> See [UNIFIED_ROADMAP.md](../servverse-repo/UNIFIED_ROADMAP.md) for the full ecosystem priority matrix.
