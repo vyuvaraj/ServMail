@@ -129,6 +129,15 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 			switch channelLower {
 			case "email":
 				log.Printf("[ServMail] [EMAIL] Sending to %s: %s", req.Target, bodyStr)
+				ctx.MockedEmailsMu.Lock()
+				*ctx.MockedEmails = append(*ctx.MockedEmails, storage.MockEmail{
+					From:    "http-api@servmail",
+					To:      req.Target,
+					Subject: "Sent via HTTP API",
+					Body:    bodyStr,
+					Time:    time.Now(),
+				})
+				ctx.MockedEmailsMu.Unlock()
 			case "slack":
 				log.Printf("[ServMail] [SLACK] Posting to webhook %s: %s", req.Target, bodyStr)
 			case "sms":
