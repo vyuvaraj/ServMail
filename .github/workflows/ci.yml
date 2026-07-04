@@ -1,21 +1,32 @@
-name: Go CI
+name: ServMail CI
 
 on:
   push:
-    branches: [ main ]
+    branches: ["main", "feature/*"]
   pull_request:
-    branches: [ main ]
+    branches: ["main"]
 
 jobs:
-  build-and-test:
+  ci:
+    name: Build · Test · Vet
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.4'
+          go-version: "1.22"
+          cache: true
 
-      - name: Run Tests
-        run: go test -v ./...
+      - name: Build (OSS)
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (OSS)
+        run: go test ./... -timeout 120s
+
+      - name: Build (EE compile check)
+        run: go build -tags enterprise ./...

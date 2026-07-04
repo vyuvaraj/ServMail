@@ -1,0 +1,76 @@
+project_name: servmail
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: servmail
+    main: .
+    binary: servmail
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.buildDate={{.Date}}
+
+archives:
+  - id: servmail
+    builds: [servmail]
+    name_template: "servmail_{{.Version}}_{{.Os}}_{{.Arch}}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - Merge pull request
+      - Merge branch
+
+dockers:
+  - image_templates:
+      - "ghcr.io/vyuvaraj/servmail:{{.Tag}}"
+      - "ghcr.io/vyuvaraj/servmail:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=org.opencontainers.image.title=ServMail"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.source=https://github.com/vyuvaraj/ServMail"
+
+brews:
+  - name: servmail
+    repository:
+      owner: vyuvaraj
+      name: homebrew-serv
+    homepage: "https://github.com/vyuvaraj/ServMail"
+    description: "Email delivery and SMTP service from the ServVerse platform"
+    license: "Apache-2.0"
+    install: |
+      bin.install "servmail"
+    test: |
+      system "#{bin}/servmail", "--version"
+
+scoops:
+  - repository:
+      owner: vyuvaraj
+      name: scoop-serv
+    homepage: "https://github.com/vyuvaraj/ServMail"
+    description: "Email delivery and SMTP service from the ServVerse platform"
+    license: "Apache-2.0"
