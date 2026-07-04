@@ -1,4 +1,4 @@
-project_name: servmail
+﻿project_name: servmail
 version: 2
 
 before:
@@ -47,7 +47,7 @@ dockers:
   - image_templates:
       - "ghcr.io/vyuvaraj/servmail:{{.Tag}}"
       - "ghcr.io/vyuvaraj/servmail:latest"
-    dockerfile: Dockerfile
+    dockerfile: Dockerfile.goreleaser
     build_flag_templates:
       - "--label=org.opencontainers.image.title=ServMail"
       - "--label=org.opencontainers.image.version={{.Version}}"
