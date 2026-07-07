@@ -177,6 +177,8 @@ var (
 	IsolateTopicHook func(ctx context.Context, topic string) string
 	// IsolateDBPoolHook is dynamically injected by the Enterprise Edition module.
 	IsolateDBPoolHook func(ctx context.Context, dbName string) string
+	// IsolateBucketHook is dynamically injected by the Enterprise Edition module.
+	IsolateBucketHook func(ctx context.Context, bucket string) string
 )
 
 // IsolateTopic prefixes a topic name with the tenant ID from context.
@@ -197,6 +199,16 @@ func IsolateDBPool(ctx context.Context, dbName string) string {
 		return IsolateDBPoolHook(ctx, dbName)
 	}
 	return dbName
+}
+
+// IsolateBucket prefixes a storage bucket name with the tenant ID from context.
+// In OSS: returns the bucket unchanged (single-tenant mode).
+// In EE: prefixes with tenant ID for multi-tenant S3 storage isolation.
+func IsolateBucket(ctx context.Context, bucket string) string {
+	if IsolateBucketHook != nil {
+		return IsolateBucketHook(ctx, bucket)
+	}
+	return bucket
 }
 
 // VersionHandler returns a JSON version response.
