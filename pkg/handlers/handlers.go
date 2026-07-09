@@ -14,6 +14,10 @@ import (
 	mailtemplate "servmail/pkg/template"
 )
 
+var (
+	EnterpriseSignDKIM = func(body string) string { return "" }
+)
+
 type HandlerContext struct {
 	RateLimits      map[string][]time.Time
 	RateLimitsMu    *sync.Mutex
@@ -128,6 +132,10 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 		if deliveryErr == nil {
 			switch channelLower {
 			case "email":
+				dkimSig := EnterpriseSignDKIM(bodyStr)
+				if dkimSig != "" {
+					log.Printf("[ServMail] [DKIM] Added signature: %s", dkimSig)
+				}
 				log.Printf("[ServMail] [EMAIL] Sending to %s: %s", req.Target, bodyStr)
 				ctx.MockedEmailsMu.Lock()
 				*ctx.MockedEmails = append(*ctx.MockedEmails, storage.MockEmail{
