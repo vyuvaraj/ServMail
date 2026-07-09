@@ -1,4 +1,4 @@
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
-github.com/vyuvaraj/ServShared v0.1.1-0.20260707062556-f2bd3a534e96 h1:1wFqTATSVv7WgirU3S39zKsGx7M+QWMIk772xt6CWfE=
-github.com/vyuvaraj/ServShared v0.1.1-0.20260707062556-f2bd3a534e96/go.mod h1:quYZYsX/CJFhifDhhhpf3H32EZAov8SX+5eGC8wb5dI=
+github.com/vyuvaraj/ServShared v0.1.1-0.20260709055203-a69c44124438 h1:to34m5s5B1CNpO+QLve5a1yCBkCv2hTYHrJfAhor9wI=
+github.com/vyuvaraj/ServShared v0.1.1-0.20260709055203-a69c44124438/go.mod h1:quYZYsX/CJFhifDhhhpf3H32EZAov8SX+5eGC8wb5dI=
