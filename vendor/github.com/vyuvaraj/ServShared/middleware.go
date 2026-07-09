@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -236,6 +239,56 @@ func DeprecationMiddleware(sunsetDate string) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// ChaosMiddleware injects random latencies and/or service dropouts for development testing.
+func ChaosMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Check for Latency Chaos
+		latencyMs := 0
+		if latencyEnv := os.Getenv("SERV_CHAOS_LATENCY_MS"); latencyEnv != "" {
+			if val, err := strconv.Atoi(latencyEnv); err == nil {
+				latencyMs = val
+			}
+		}
+		if latencyHeader := r.Header.Get("X-Chaos-Latency"); latencyHeader != "" {
+			if val, err := strconv.Atoi(latencyHeader); err == nil {
+				latencyMs = val
+			}
+		}
+
+		if latencyMs > 0 {
+			time.Sleep(time.Duration(latencyMs) * time.Millisecond)
+		}
+
+		// 2. Check for Drop/Failure Chaos
+		dropRate := 0.0
+		if dropEnv := os.Getenv("SERV_CHAOS_DROP_RATE"); dropEnv != "" {
+			if val, err := strconv.ParseFloat(dropEnv, 64); err == nil {
+				dropRate = val
+			}
+		}
+		if dropHeader := r.Header.Get("X-Chaos-Drop-Rate"); dropHeader != "" {
+			if val, err := strconv.ParseFloat(dropHeader, 64); err == nil {
+				dropRate = val
+			}
+		} else if r.Header.Get("X-Chaos-Drop") == "true" {
+			dropRate = 1.0
+		}
+
+		if dropRate > 0.0 {
+			// Seed random source if needed
+			if rand.Float64() < dropRate {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"Chaos fault injected: request dropped","code":"ERR_CHAOS_DROPPED"}`))
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 
 
 
