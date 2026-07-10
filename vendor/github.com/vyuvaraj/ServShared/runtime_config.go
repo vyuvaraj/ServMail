@@ -29,12 +29,33 @@ type RuntimeConfig struct {
 	TimeoutMs    int
 	BackoffMs    int
 	EnableOtel   bool
+	Standalone   bool
 	Region       string
+}
+
+// IsStandalone returns true if either the environment variable SERV_STANDALONE is "true"
+// or the CLI argument list contains "--standalone".
+func IsStandalone() bool {
+	if os.Getenv("SERV_STANDALONE") == "true" {
+		return true
+	}
+	for _, arg := range os.Args {
+		if arg == "--standalone" {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultRuntimeConfig returns a RuntimeConfig populated from environment
 // variables, falling back to safe defaults when vars are absent.
 func DefaultRuntimeConfig() *RuntimeConfig {
+	standalone := IsStandalone()
+	enableOtel := getenvBool("SERV_OTEL_ENABLED", true)
+	if standalone {
+		enableOtel = false
+	}
+
 	return &RuntimeConfig{
 		MeshAddr:     getenv("SERV_MESH_ADDR", "http://localhost:8089"),
 		SelfAddr:     getenv("SERV_SELF_ADDR", ""),
@@ -43,7 +64,8 @@ func DefaultRuntimeConfig() *RuntimeConfig {
 		MaxRetries:   getenvInt("SERV_MAX_RETRIES", 3),
 		TimeoutMs:    getenvInt("SERV_TIMEOUT_MS", 2000),
 		BackoffMs:    getenvInt("SERV_BACKOFF_MS", 50),
-		EnableOtel:   getenvBool("SERV_OTEL_ENABLED", true),
+		EnableOtel:   enableOtel,
+		Standalone:   standalone,
 		Region:       getenv("SERV_REGION", ""),
 	}
 }

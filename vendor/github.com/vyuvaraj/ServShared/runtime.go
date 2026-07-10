@@ -76,6 +76,12 @@ func (r *ServRuntime) SetResolver(res MeshResolver) {
 //
 // Start is non-blocking after the initial registration attempt.
 func (r *ServRuntime) Start(ctx context.Context) error {
+	if r.Config.Standalone {
+		// Standalone mode: skip mesh registration & heartbeat loop
+		close(r.done)
+		return nil
+	}
+
 	// 1. OTel init
 	if r.Config.EnableOtel {
 		InitTrace(r.ServiceName)

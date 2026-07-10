@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -74,6 +75,12 @@ func (c *StoreClient) EnsureBucket(bucket string) error {
 
 // Put writes object data to a bucket and key in ServStore.
 func (c *StoreClient) Put(bucket, key string, data []byte) error {
+	if IsStandalone() {
+		dir := filepath.Join(".servstore", bucket)
+		_ = os.MkdirAll(dir, 0755)
+		return os.WriteFile(filepath.Join(dir, key), data, 0644)
+	}
+
 	_ = c.EnsureBucket(bucket) // Ensure bucket exists first
 	url := fmt.Sprintf("%s/%s/%s", c.Endpoint, bucket, key)
 	req, err := http.NewRequest("PUT", url, bytes.NewReader(data))
@@ -99,6 +106,15 @@ func (c *StoreClient) Put(bucket, key string, data []byte) error {
 
 // Get reads object data from a bucket and key in ServStore.
 func (c *StoreClient) Get(bucket, key string) ([]byte, error) {
+	if IsStandalone() {
+		path := filepath.Join(".servstore", bucket, key)
+		data, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			return nil, os.ErrNotExist
+		}
+		return data, err
+	}
+
 	url := fmt.Sprintf("%s/%s/%s", c.Endpoint, bucket, key)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -125,6 +141,11 @@ func (c *StoreClient) Get(bucket, key string) ([]byte, error) {
 
 // SemanticSearch runs a vector similarity/semantic search query on a bucket in ServStore.
 func (c *StoreClient) SemanticSearch(bucket, query string, limit int) ([]string, error) {
+	if IsStandalone() {
+		// Mock local semantic search
+		return []string{}, nil
+	}
+
 	searchURL := fmt.Sprintf("%s/api/v1/search?bucket=%s&q=%s&limit=%d", c.Endpoint, bucket, url.QueryEscape(query), limit)
 	req, err := http.NewRequest("GET", searchURL, nil)
 	if err != nil {
@@ -155,6 +176,15 @@ func (c *StoreClient) SemanticSearch(bucket, query string, limit int) ([]string,
 
 // Delete deletes an object from a bucket and key in ServStore.
 func (c *StoreClient) Delete(bucket, key string) error {
+	if IsStandalone() {
+		path := filepath.Join(".servstore", bucket, key)
+		err := os.Remove(path)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
 	urlStr := fmt.Sprintf("%s/%s/%s", c.Endpoint, bucket, key)
 	req, err := http.NewRequest("DELETE", urlStr, nil)
 	if err != nil {
