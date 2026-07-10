@@ -51,3 +51,22 @@ func TestRenderTemplateCondition(t *testing.T) {
 		t.Errorf("expected 'Yes', got %q", out)
 	}
 }
+
+type mockTemplateEngine struct{}
+
+func (m *mockTemplateEngine) Render(tmpl string, ctx map[string]interface{}) (string, error) {
+	return "mocked-rendered-content", nil
+}
+
+func TestPluggableTemplateEngine(t *testing.T) {
+	ActiveTemplateEngine = &mockTemplateEngine{}
+	defer func() { ActiveTemplateEngine = nil }()
+
+	out, err := RenderTemplate("any-template-text", nil)
+	if err != nil {
+		t.Fatalf("failed: %v", err)
+	}
+	if out != "mocked-rendered-content" {
+		t.Errorf("expected 'mocked-rendered-content', got %q", out)
+	}
+}
