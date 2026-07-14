@@ -62,18 +62,18 @@ type SendResponse struct {
 
 func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var req storage.SendRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid payload: "+err.Error(), http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Invalid payload: "+err.Error(), "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
 	if req.Channel == "" || req.Target == "" || req.Template == "" {
-		http.Error(w, "Channel, target, and template are required", http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Channel, target, and template are required", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
@@ -136,7 +136,7 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 	bodyStr, err := mailtemplate.RenderTemplate(templateText, req.Context)
 	if err != nil {
-		http.Error(w, "Template execution/compile error: "+err.Error(), http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Template execution/compile error: "+err.Error(), "ERR_TEMPLATE_COMPILE_ERROR", http.StatusBadRequest)
 		return
 	}
 
@@ -196,7 +196,7 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 			case "sms":
 				log.Printf("[ServMail] [SMS] Sending to number %s: %s", req.Target, bodyStr)
 			default:
-				http.Error(w, "Unsupported delivery channel: "+req.Channel, http.StatusBadRequest)
+				ServShared.WriteJSONError(w, r, "Unsupported delivery channel: "+req.Channel, "ERR_UNSUPPORTED_CHANNEL", http.StatusBadRequest)
 				return
 			}
 			break
@@ -264,7 +264,7 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 
 func (ctx *HandlerContext) HandleRegisterTemplate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -274,12 +274,12 @@ func (ctx *HandlerContext) HandleRegisterTemplate(w http.ResponseWriter, r *http
 		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Invalid payload", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
 	if req.Name == "" || req.Version == "" || req.Content == "" {
-		http.Error(w, "Name, version, and content are required", http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Name, version, and content are required", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
@@ -315,15 +315,19 @@ func (ctx *HandlerContext) HandleRegisterTemplate(w http.ResponseWriter, r *http
 
 func (ctx *HandlerContext) HandleGetTracking(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
 	path := r.URL.Path
 	var msgID string
 	fmt.Sscanf(path, "/api/mail/tracking/%s", &msgID)
+	// Fallback for /api/v1/ prefix
 	if msgID == "" {
-		http.Error(w, "Message ID is required", http.StatusBadRequest)
+		fmt.Sscanf(path, "/api/v1/mail/tracking/%s", &msgID)
+	}
+	if msgID == "" {
+		ServShared.WriteJSONError(w, r, "Message ID is required", "ERR_BAD_REQUEST", http.StatusBadRequest)
 		return
 	}
 
@@ -332,7 +336,7 @@ func (ctx *HandlerContext) HandleGetTracking(w http.ResponseWriter, r *http.Requ
 	ctx.TrackingMu.RUnlock()
 
 	if !exists {
-		http.Error(w, "Tracking info not found", http.StatusNotFound)
+		ServShared.WriteJSONError(w, r, "Tracking info not found", "ERR_NOT_FOUND", http.StatusNotFound)
 		return
 	}
 
@@ -343,7 +347,7 @@ func (ctx *HandlerContext) HandleGetTracking(w http.ResponseWriter, r *http.Requ
 
 func (ctx *HandlerContext) HandlePostTrackingEvent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -352,7 +356,7 @@ func (ctx *HandlerContext) HandlePostTrackingEvent(w http.ResponseWriter, r *htt
 		Status    string `json:"status"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Invalid payload", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
@@ -365,7 +369,7 @@ func (ctx *HandlerContext) HandlePostTrackingEvent(w http.ResponseWriter, r *htt
 	ctx.TrackingMu.Unlock()
 
 	if !exists {
-		http.Error(w, "Message not found", http.StatusNotFound)
+		ServShared.WriteJSONError(w, r, "Message not found", "ERR_NOT_FOUND", http.StatusNotFound)
 		return
 	}
 
@@ -410,12 +414,12 @@ func (ctx *HandlerContext) HandlePreferences(w http.ResponseWriter, r *http.Requ
 	if r.Method == http.MethodPost {
 		var req storage.Preferences
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "Invalid payload", http.StatusBadRequest)
+			ServShared.WriteJSONError(w, r, "Invalid payload", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 			return
 		}
 
 		if req.Recipient == "" {
-			http.Error(w, "Recipient is required", http.StatusBadRequest)
+			ServShared.WriteJSONError(w, r, "Recipient is required", "ERR_BAD_REQUEST", http.StatusBadRequest)
 			return
 		}
 
@@ -429,12 +433,12 @@ func (ctx *HandlerContext) HandlePreferences(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 }
 
 func (ctx *HandlerContext) HandleMailDashboard(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -479,7 +483,7 @@ func (ctx *HandlerContext) HandleUploadAttachment(w http.ResponseWriter, r *http
 	}
 
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -488,7 +492,7 @@ func (ctx *HandlerContext) HandleUploadAttachment(w http.ResponseWriter, r *http
 		Payload  string `json:"payload"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		ServShared.WriteJSONError(w, r, "Invalid payload", "ERR_BAD_REQUEST_BODY", http.StatusBadRequest)
 		return
 	}
 
@@ -524,7 +528,7 @@ func (ctx *HandlerContext) HandleUploadAttachment(w http.ResponseWriter, r *http
 
 func (ctx *HandlerContext) HandleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -536,7 +540,7 @@ func (ctx *HandlerContext) HandleGetAttachment(w http.ResponseWriter, r *http.Re
 	ctx.AttachmentsMu.RUnlock()
 
 	if !exists {
-		http.Error(w, "Attachment not found", http.StatusNotFound)
+		ServShared.WriteJSONError(w, r, "Attachment not found", "ERR_NOT_FOUND", http.StatusNotFound)
 		return
 	}
 
@@ -561,5 +565,5 @@ func (ctx *HandlerContext) HandleGetMockEmails(w http.ResponseWriter, r *http.Re
 		w.Write([]byte(`{"status":"success","message":"Mock emails cleared"}`))
 		return
 	}
-	http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+	ServShared.WriteJSONError(w, r, "Method Not Allowed", "ERR_METHOD_NOT_ALLOWED", http.StatusMethodNotAllowed)
 }
