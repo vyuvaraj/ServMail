@@ -264,7 +264,15 @@ func main() {
 	mux.HandleFunc("/api/mail/mock-smtp", handleGetMockEmails)
 	mux.HandleFunc("/api/v1/mail/mock-smtp", handleGetMockEmails)
 
-	serverHandler := ServShared.TraceMiddleware("servmail", ServShared.AuthMiddleware(mux))
+	serverHandler := ServShared.TraceMiddleware("servmail",
+		ServShared.AuthMiddleware(
+			ServShared.RateLimitMiddleware(
+				ServShared.CORSMiddleware(
+					ServShared.MaxBytesMiddleware(10*1024*1024)(mux),
+				),
+			),
+		),
+	)
 
 	server := &http.Server{
 		Addr:    ":" + port,
