@@ -32,12 +32,33 @@ func TestRenderTemplateInvalidSyntax(t *testing.T) {
 }
 
 func TestRenderTemplateMissingKey(t *testing.T) {
-	out, err := RenderTemplate("Hello {{.Absent}}", map[string]interface{}{})
-	if err != nil {
-		t.Fatalf("failed: %v", err)
+	// With missingkey=error, referencing an absent variable must return an error,
+	// not silently produce "<no value>".
+	_, err := RenderTemplate("Hello {{.Absent}}", map[string]interface{}{})
+	if err == nil {
+		t.Error("expected an error for missing template variable, got nil")
 	}
-	if out != "Hello <no value>" {
-		t.Errorf("expected missing key output, got %q", out)
+}
+
+// TestRenderTemplateMissingVariableGraceful is the D.55 acceptance test:
+// multiple missing variables all produce graceful errors, never panics.
+func TestRenderTemplateMissingVariableGraceful(t *testing.T) {
+	cases := []struct {
+		name   string
+		tmpl   string
+		ctx    map[string]interface{}
+	}{
+		{"single missing", "Dear {{.Name}},", map[string]interface{}{}},
+		{"multiple missing", "{{.Greeting}} {{.Name}}, your order {{.OrderID}} is ready.", map[string]interface{}{}},
+		{"partial context", "Hello {{.Name}}, code {{.Code}}", map[string]interface{}{"Name": "Alice"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := RenderTemplate(tc.tmpl, tc.ctx)
+			if err == nil {
+				t.Errorf("expected error for missing variable in %q, got nil", tc.tmpl)
+			}
+		})
 	}
 }
 

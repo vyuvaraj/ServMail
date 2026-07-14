@@ -19,7 +19,7 @@ func RenderTemplate(templateText string, context map[string]interface{}) (string
 		return ActiveTemplateEngine.Render(templateText, context)
 	}
 
-	tmpl, err := template.New("mail_template").Parse(templateText)
+	tmpl, err := template.New("mail_template").Option("missingkey=error").Parse(templateText)
 	if err != nil {
 		return "", err
 	}

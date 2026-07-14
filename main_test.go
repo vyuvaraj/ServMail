@@ -8,14 +8,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"os"
 	"github.com/vyuvaraj/ServShared"
+	"servmail/pkg/handlers"
 	"servmail/pkg/queue"
 	"servmail/pkg/storage"
 )
+
 
 func setupTest() {
 	rateLimitsMu.Lock()
@@ -633,4 +636,76 @@ func TestQueueRetention(t *testing.T) {
 		t.Errorf("expected persisted queue size to be 2, got %d", dq2.Size())
 	}
 }
+
+// TestDLQRetryExponentialBackoff is the D.56 acceptance test.
+// It verifies that 5 delivery failures produce retry intervals matching
+// 1×Base, 2×Base, 4×Base, 8×Base, 16×Base (exponential doubling).
+func TestDLQRetryExponentialBackoff(t *testing.T) {
+	setupTest()
+
+	// Use 1ms as the base to keep the test fast while still verifying the sequence.
+	const base = 1 * time.Millisecond
+	expectedIntervals := []time.Duration{base, 2 * base, 4 * base, 8 * base, 16 * base}
+
+	var mu sync.Mutex
+	var capturedSleeps []time.Duration
+
+	mockedEmails := []storage.MockEmail{}
+	var mockedEmailsMu sync.RWMutex
+
+	ctx := &handlers.HandlerContext{
+		RateLimits:      make(map[string][]time.Time),
+		RateLimitsMu:    &sync.Mutex{},
+		TemplateRepo:    make(map[string]map[string]string),
+		TemplateRepoMu:  &sync.RWMutex{},
+		TrackingRepo:    make(map[string]*storage.TrackingInfo),
+		TrackingMu:      &sync.RWMutex{},
+		Preferences:     make(map[string]*storage.Preferences),
+		PreferencesMu:   &sync.RWMutex{},
+		AttachmentsRepo: make(map[string]*storage.Attachment),
+		AttachmentsMu:   &sync.RWMutex{},
+		MockedEmails:    &mockedEmails,
+		MockedEmailsMu:  &mockedEmailsMu,
+		RetryBackoffBase: base,
+		MaxRetryAttempts: 5,
+		SleepFn: func(d time.Duration) {
+			mu.Lock()
+			capturedSleeps = append(capturedSleeps, d)
+			mu.Unlock()
+		},
+	}
+
+	// Target containing "fail" triggers a delivery error on every attempt
+	payload := storage.SendRequest{
+		Channel:  "email",
+		Target:   "always-fail@example.com",
+		Template: "Hello",
+	}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest("POST", "/api/mail/send", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	ctx.HandleSend(rr, req)
+
+	// Expect DLQ status
+	if rr.Code != http.StatusAccepted {
+		t.Errorf("expected 202 Accepted for DLQ fallback, got %d", rr.Code)
+	}
+	var res SendResponse
+	_ = json.NewDecoder(rr.Body).Decode(&res)
+	if res.Status != "queued_in_dlq" {
+		t.Errorf("expected queued_in_dlq, got %q", res.Status)
+	}
+
+	// Verify exactly 5 sleep intervals matching the exponential sequence
+	if len(capturedSleeps) != len(expectedIntervals) {
+		t.Fatalf("expected %d retry sleeps, got %d: %v", len(expectedIntervals), len(capturedSleeps), capturedSleeps)
+	}
+	for i, want := range expectedIntervals {
+		if capturedSleeps[i] != want {
+			t.Errorf("sleep[%d]: want %v, got %v", i, want, capturedSleeps[i])
+		}
+	}
+	t.Logf("DLQ retry backoff sequence: %v", capturedSleeps)
+}
+
 

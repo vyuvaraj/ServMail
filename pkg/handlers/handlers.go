@@ -34,6 +34,19 @@ type HandlerContext struct {
 	MockedEmailsMu  *sync.RWMutex
 	TemplateStore   storage.TemplateStore
 	DiskQueue       *queue.DiskQueue
+
+	// RetryBackoffBase is the initial backoff duration for DLQ retries.
+	// Doubles each attempt: Base, 2×Base, 4×Base, 8×Base, 16×Base.
+	// Defaults to 1s in production; set to a small value in tests.
+	RetryBackoffBase time.Duration
+
+	// MaxRetryAttempts is the total number of delivery attempts before DLQ.
+	// Defaults to 5 (giving intervals 1s, 2s, 4s, 8s, 16s).
+	MaxRetryAttempts int
+
+	// SleepFn is the sleep implementation used between retries.
+	// Defaults to time.Sleep; override in tests to capture intervals without blocking.
+	SleepFn func(d time.Duration)
 }
 
 type SendResponse struct {
@@ -136,8 +149,16 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 	// 3. Deliver via channel with retries
 	channelLower := strings.ToLower(req.Channel)
 	var deliveryErr error
-	maxAttempts := 3
-	backoff := 10 * time.Millisecond
+
+	maxAttempts := ctx.MaxRetryAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = 5
+	}
+	backoffBase := ctx.RetryBackoffBase
+	if backoffBase <= 0 {
+		backoffBase = 1 * time.Second
+	}
+	backoff := backoffBase
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		deliveryErr = nil
@@ -174,7 +195,11 @@ func (ctx *HandlerContext) HandleSend(w http.ResponseWriter, r *http.Request) {
 		}
 
 		log.Printf("[ServMail] Attempt %d failed: %v. Retrying in %v...", attempt, deliveryErr, backoff)
-		time.Sleep(backoff)
+		sleepFn := ctx.SleepFn
+		if sleepFn == nil {
+			sleepFn = time.Sleep
+		}
+		sleepFn(backoff)
 		backoff *= 2
 	}
 
