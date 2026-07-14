@@ -23,6 +23,7 @@ type LockEntry struct {
 	Owner      string    `json:"owner"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	AcquiredAt time.Time `json:"acquired_at"`
+	Token      int64     `json:"token"`
 }
 
 // AcquireResult mirrors lock.AcquireResult.

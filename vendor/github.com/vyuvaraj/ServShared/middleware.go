@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vyuvaraj/ServShared/pkg/middleware"
@@ -288,6 +290,67 @@ func ChaosMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// CORSMiddleware adds Access-Control-Allow-Origin and other CORS headers.
+func CORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := os.Getenv("SERV_CORS_ORIGIN")
+		if origin == "" {
+			origin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Trace-ID, X-Tenant-ID, X-Signature, X-Public-Key, X-Provenance")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+type ipRateLimiter struct {
+	mu     sync.Mutex
+	limits map[string][]time.Time
+}
+
+var globalIPLimiter = &ipRateLimiter{
+	limits: make(map[string][]time.Time),
+}
+
+// RateLimitMiddleware enforces a sliding window limit of 100 requests per minute per IP.
+func RateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			ip = r.RemoteAddr
+		}
+		
+		globalIPLimiter.mu.Lock()
+		now := time.Now()
+		cutoff := now.Add(-1 * time.Minute)
+		
+		var active []time.Time
+		for _, t := range globalIPLimiter.limits[ip] {
+			if t.After(cutoff) {
+				active = append(active, t)
+			}
+		}
+		
+		if len(active) >= 100 {
+			globalIPLimiter.mu.Unlock()
+			WriteJSONError(w, r, "Rate limit exceeded. Max 100 requests per minute.", "ERR_RATE_LIMIT_EXCEEDED", http.StatusTooManyRequests)
+			return
+		}
+		
+		active = append(active, now)
+		globalIPLimiter.limits[ip] = active
+		globalIPLimiter.mu.Unlock()
+		
+		next.ServeHTTP(w, r)
+	})
+}
+
 
 
 
